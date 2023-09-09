@@ -3,9 +3,11 @@
 import json
 import os
 import re
+from pathlib import Path
 
 import docker
 import environs
+from tqdm import tqdm
 
 env = environs.Env()
 env.read_env()
@@ -13,7 +15,7 @@ env.read_env()
 # prefix for all docker container names
 PREFIX = env("PREFIX", default="fullnet")
 
-DUMP_DIRNAME = ".log-dumps"
+DUMP_DIRNAME = "/data-raid/log-dumps"
 
 
 client = docker.from_env()
@@ -22,9 +24,6 @@ LOG_PATTERN = r"\[(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\] \[(?P<c
 
 
 def parse_log_line(line):
-    """
-    Parse a log line into a dict
-    """
     matches = re.fullmatch(LOG_PATTERN, line)
     if not matches:
         return None
@@ -35,46 +34,42 @@ TRACE_PATTERN = r"\"(?P<tag>.*?)\" (?P<data>.+)"
 
 
 def parse_trace_line(line):
-    """
-    Parse a trace line into a dict
-    """
     matches = re.fullmatch(TRACE_PATTERN, line)
     if not matches:
         return None
     return matches.groupdict()
 
 
-# TO_JSON_PATTERN = r"(\w+):", r'"\1":'
+NAME_PATTERN = rf"^{re.escape(PREFIX)}_node-node-"
 
 
-# def parse_trace_data(payload):
-#     """
-#     Parse a trace data payload into a dict
-#     """
-#     converted = re.sub(TO_JSON_PATTERN[0], TO_JSON_PATTERN[1], payload)
-#     return json.loads("{" + converted + "}")
+def fix_name(name):
+    return re.sub(NAME_PATTERN, "", name)
 
 
 def extract_logs(container):
-    """
-    Extract logs from a container
-    """
     print("Extracting logs from:", container.name)
 
-    BASE_DIR = f"{DUMP_DIRNAME}/{container.name}"
+    runid = container.labels["runid"]
+    assert len(runid) > 0
+
+    BASE_DIR = Path(DUMP_DIRNAME) / runid / fix_name(container.name)
     os.makedirs(BASE_DIR, exist_ok=True)
 
-    f = open(f"{BASE_DIR}/full.log", "w")
+    print("Extracting logs to:", BASE_DIR)
+
+    f = (BASE_DIR / "full.log").open("w")
+    f_full = (BASE_DIR / "full.log.json").open("w")
 
     log_files = {}
 
     def log_file(component, tag):
         key = f"{component}-{tag}"
         if key not in log_files:
-            log_files[key] = open(f"{BASE_DIR}/{component}-{tag}.log.json", "w")
+            log_files[key] = (BASE_DIR / f"{component}-{tag}.log.json").open("w")
         return log_files[key]
 
-    for line in container.logs(stream=True):
+    for line in tqdm(container.logs(stream=True), desc="Processing logs"):
         line = line.decode("utf-8").strip()
         # print(line)
 
@@ -82,44 +77,49 @@ def extract_logs(container):
         # print(parsed)
 
         if not parsed:
-            print("WARNING: Not parsed:", line)
+            # print("WARNING: Not parsed:", line)
             continue
 
         log_time = parsed["time"]
         log_component = parsed["component"]
+        log_level = parsed["level"]
+        log_payload = parsed["payload"]
 
         # f.write(line)
         # f.write("\n")
 
-        if parsed["level"] == "trace":
+        json_line_full = rf'tstamp: "{log_time}", component: "{log_component}", level: "{log_level}", payload: "{log_payload}"'
+        f_full.write(f"{{ {json_line_full} }}\n")
+
+        if log_level == "trace":
             # print("TRACE:", parsed["payload"])
 
             trace_parsed = parse_trace_line(parsed["payload"])
             assert trace_parsed is not None
             # print(trace_parsed)
 
-            # trace_data = parse_trace_data(trace_parsed["data"])
-            # print("TRACE DATA:", trace_data)
-
             trace_tag = trace_parsed["tag"]
             trace_data = trace_parsed["data"]
 
             json_line = rf'tstamp: "{log_time}", {trace_data}'
-            print(json_line)
+            # print(json_line)
 
             fl = log_file(log_component, trace_tag)
             fl.write(f"{{ {json_line} }}\n")
 
-        print()
+        # print()
+        pass
 
 
 def main():
     os.makedirs(DUMP_DIRNAME, exist_ok=True)
 
     for container in client.containers.list(all=True, filters={"name": f"{PREFIX}_node-"}):
-        print("Found node:", container.name)
+        print(f"Found node: {container.namerunid} ({container.labels['runid']})")
 
         extract_logs(container)
+
+        # break
 
     pass
 
