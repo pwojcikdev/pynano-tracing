@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import concurrent.futures
 import json
 import os
 import re
@@ -48,15 +49,17 @@ def fix_name(name):
 
 
 def extract_logs(container):
-    print("Extracting logs from:", container.name)
+    # print("Extracting logs from:", container.name)
 
     runid = container.labels["runid"]
     assert len(runid) > 0
 
+    print(f"Extracting logs from: {container.name} ({runid})")
+
     BASE_DIR = Path(DUMP_DIRNAME) / runid / fix_name(container.name)
     os.makedirs(BASE_DIR, exist_ok=True)
 
-    print("Extracting logs to:", BASE_DIR)
+    print(f"Extracting logs to: {BASE_DIR}")
 
     f = (BASE_DIR / "full.log").open("w")
     f_full = (BASE_DIR / "full.log.json").open("w")
@@ -111,13 +114,18 @@ def extract_logs(container):
         pass
 
 
+def multiprocessing_handler(container_id):
+    container = client.containers.get(container_id)
+    extract_logs(container)
+
+
 def main():
     os.makedirs(DUMP_DIRNAME, exist_ok=True)
 
-    for container in client.containers.list(all=True, filters={"name": f"{PREFIX}_node-"}):
-        print(f"Found node: {container.namerunid} ({container.labels['runid']})")
+    containers = client.containers.list(all=True, filters={"name": f"{PREFIX}_node-"})
 
-        extract_logs(container)
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        executor.map(multiprocessing_handler, [c.id for c in containers])
 
         # break
 
