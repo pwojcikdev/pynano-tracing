@@ -91,7 +91,7 @@ def extract_logs(container):
         # f.write(line)
         # f.write("\n")
 
-        json_line_full = rf'tstamp: "{log_time}", component: "{log_component}", level: "{log_level}", payload: "{log_payload}"'
+        json_line_full = rf'tstamp: "{log_time}", component: "{log_component}", level: "{log_level}", payload: {json.dumps(log_payload)}'
         f_full.write(f"{{ {json_line_full} }}\n")
 
         if log_level == "trace":
